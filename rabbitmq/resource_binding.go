@@ -1,12 +1,15 @@
 package rabbitmq
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
 	"strings"
 
 	"github.com/hashicorp/terraform/helper/schema"
+	"github.com/hashicorp/terraform/helper/structure"
+	"github.com/hashicorp/terraform/helper/validation"
 	"github.com/michaelklishin/rabbit-hole"
 )
 
@@ -56,9 +59,18 @@ func resourceBinding() *schema.Resource {
 			},
 
 			"arguments": {
-				Type:     schema.TypeMap,
-				Optional: true,
-				ForceNew: true,
+				Type:          schema.TypeMap,
+				Optional:      true,
+				ForceNew:      true,
+				ConflictsWith: []string{"arguments_json"},
+			},
+			"arguments_json": {
+				Type:             schema.TypeString,
+				Optional:         true,
+				ForceNew:         true,
+				ValidateFunc:     validation.ValidateJsonString,
+				ConflictsWith:    []string{"arguments"},
+				DiffSuppressFunc: structure.SuppressJsonDiff,
 			},
 		},
 	}
@@ -66,6 +78,18 @@ func resourceBinding() *schema.Resource {
 
 func CreateBinding(d *schema.ResourceData, meta interface{}) error {
 	rmqc := meta.(*rabbithole.Client)
+	arguments := d.Get("arguments").(map[string]interface{})
+
+	if v, ok := d.Get("arguments_json").(string); ok && v != "" {
+		var arguments_json map[string]interface{}
+		err := json.Unmarshal([]byte(v), &arguments_json)
+		if err != nil {
+			return err
+		}
+
+		// delete(d, "arguments_json")
+		arguments = arguments_json
+	}
 
 	vhost := d.Get("vhost").(string)
 	bindingInfo := rabbithole.BindingInfo{
@@ -73,8 +97,11 @@ func CreateBinding(d *schema.ResourceData, meta interface{}) error {
 		Destination:     d.Get("destination").(string),
 		DestinationType: d.Get("destination_type").(string),
 		RoutingKey:      d.Get("routing_key").(string),
-		Arguments:       d.Get("arguments").(map[string]interface{}),
+		Arguments:       arguments,
 	}
+
+	// If arguments_json is used, unmarshal it into a generic interface
+	// and use it as the "arguments" key for the binding.
 
 	propertiesKey, err := declareBinding(rmqc, vhost, bindingInfo)
 	if err != nil {
